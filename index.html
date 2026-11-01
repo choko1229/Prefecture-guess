@@ -174,60 +174,16 @@ async function locate(){
 }
 
 /* ---------- 絞り込み ----------
-   1) 人口を重みにハフマン木を作り、各県の「当たるまでの質問数（深さ）」だけを取り出す
-   2) 質問のたびに、その深さを崩さない分け方（クラフト和がちょうど半分になる組）の中から
-      件数がいちばん半分に近く、地理的に途切れの少ない組を選ぶ
-   → 平均質問数はハフマンと同じまま、毎回おおよそ半分ずつ絞り込める */
-function huffmanDepths(list){
+   人口を重みにハフマン木を作り、各分岐で県数の少ない側を質問する */
+function buildTree(list){
   let seq = 0;
-  let nodes = list.map(p=>({w:p.pop, items:[p], id:seq++}));
-  const depth = new Map(list.map(p=>[p.code,0]));
+  let nodes = list.map(p=>({w:p.pop, leaf:p, items:[p], id:seq++}));
   while(nodes.length > 1){
     nodes.sort((a,b)=>a.w-b.w || a.id-b.id);
     const a = nodes.shift(), b = nodes.shift();
-    for(const p of a.items) depth.set(p.code, depth.get(p.code)+1);
-    for(const p of b.items) depth.set(p.code, depth.get(p.code)+1);
-    nodes.push({w:a.w+b.w, items:a.items.concat(b.items), id:seq++});
+    nodes.push({w:a.w+b.w, left:b, right:a, items:a.items.concat(b.items), id:seq++});
   }
-  return depth;
-}
-function splitHalf(cands, depth){
-  const maxD = Math.max(...cands.map(p=>depth.get(p.code)));
-  const half = 2 ** (maxD-1);
-  const unit = cands.map(p=>2 ** (maxD - depth.get(p.code)));
-  const N = cands.length;
-  const key = (k,c,l)=>(k*(N+1)+c)*2+l;
-  let dp = new Map([[key(0,0,0), 0]]);
-  const parents = [];
-  for(let i=0;i<N;i++){
-    const next = new Map(), par = new Map();
-    for(const [kk, runs] of dp){
-      const l = kk % 2, c = Math.floor(kk/2) % (N+1), k = Math.floor(Math.floor(kk/2)/(N+1));
-      for(const take of [0,1]){
-        const k2 = k + unit[i]*take;
-        if(k2 > half) continue;
-        const nk = key(k2, c+take, take);
-        const r2 = runs + (take && !l ? 1 : 0);
-        if(!next.has(nk) || r2 < next.get(nk)){ next.set(nk, r2); par.set(nk, kk); }
-      }
-    }
-    parents.push(par); dp = next;
-  }
-  let best = null, bestScore = null;
-  for(const [kk, runs] of dp){
-    const c = Math.floor(kk/2) % (N+1), k = Math.floor(Math.floor(kk/2)/(N+1));
-    if(k !== half) continue;
-    const score = [Math.abs(2*c - N), runs];
-    if(!bestScore || score[0] < bestScore[0] || (score[0] === bestScore[0] && score[1] < bestScore[1])){ best = kk; bestScore = score; }
-  }
-  if(best === null) throw new Error("split not found");
-  const ask = [], rest = [];
-  let kk = best;
-  for(let i=N-1;i>=0;i--){
-    (kk % 2 ? ask : rest).push(cands[i]);
-    kk = parents[i].get(kk);
-  }
-  return {ask:ask.reverse(), rest:rest.reverse()};
+  return nodes[0];
 }
 
 /* ---------- ゲーム ---------- */
@@ -235,7 +191,7 @@ const stage = document.getElementById("stage");
 let state;
 
 function newGame(){
-  state = {count:0, first:null, cands:null, depth:null, history:[]};
+  state = {count:0, first:null, node:null, history:[]};
   paint();
   stage.innerHTML = `<div class="step">準備中</div><div class="btns"><div class="spinner" aria-hidden="true"></div><p class="note">考えています…</p></div>`;
   locate().then(pref=>{
@@ -253,15 +209,18 @@ function renderFirst(){
   document.getElementById("b-yes").onclick = ()=>{ state.count = 1; renderWin(state.first); };
   document.getElementById("b-no").onclick = ()=>{
     state.count = 1;
-    state.cands = PREFS.filter(p=>p !== state.first);
-    state.depth = huffmanDepths(state.cands);
+    state.node = buildTree(PREFS.filter(p=>p !== state.first));
     renderQuestion();
   };
 }
 
 function renderQuestion(){
-  if(state.cands.length === 1){ renderWin(state.cands[0]); return; }
-  const {ask, rest} = splitHalf(state.cands, state.depth);
+  const n = state.node;
+  if(n.leaf){ renderWin(n.leaf); return; }
+  const askLeft = n.left.items.length <= n.right.items.length;
+  const asked = askLeft ? n.left : n.right;
+  const other = askLeft ? n.right : n.left;
+  const ask = asked.items.slice().sort((a,b)=>a.code-b.code);
   paint({ask});
   const single = ask.length === 1;
   const list = ask.map(p=>`<span class="chip">${p.name}</span>`).join("");
@@ -273,18 +232,17 @@ function renderQuestion(){
       <button class="yes" id="b-yes">はい</button><button class="no" id="b-no">いいえ</button>
       <button id="b-back" ${state.history.length ? "" : "disabled"}>1つ戻る</button>
     </div>`;
-  const go = side=>{
-    state.history.push({cands:state.cands, depth:state.depth, count:state.count});
-    state.depth = new Map(side.map(p=>[p.code, state.depth.get(p.code)-1]));
-    state.cands = side;
+  const go = child=>{
+    state.history.push({node:state.node, count:state.count});
+    state.node = child;
     state.count++;
     renderQuestion();
   };
-  document.getElementById("b-yes").onclick = ()=>go(ask);
-  document.getElementById("b-no").onclick = ()=>go(rest);
+  document.getElementById("b-yes").onclick = ()=>go(asked);
+  document.getElementById("b-no").onclick = ()=>go(other);
   document.getElementById("b-back").onclick = ()=>{
     const h = state.history.pop(); if(!h) return;
-    state.cands = h.cands; state.depth = h.depth; state.count = h.count;
+    state.node = h.node; state.count = h.count;
     renderQuestion();
   };
 }
