@@ -80,6 +80,33 @@ button:disabled{opacity:.45;cursor:default}
 .share-row a,.share-row button{font:inherit;font-size:.9rem;font-weight:700;border-radius:999px;padding:6px 16px;border:1px solid var(--line);background:var(--bg);color:var(--ink);text-decoration:none;cursor:pointer}
 .share-row a:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
 .share-row .primary{background:var(--indigo);border-color:var(--indigo);color:var(--surface)}
+/* 回答時の演出 */
+button.pressed{animation:press .32s ease}
+@keyframes press{0%{transform:scale(1)}35%{transform:scale(.9)}70%{transform:scale(1.06)}100%{transform:scale(1)}}
+.btns button{position:relative;overflow:hidden}
+.btns button .ripple{position:absolute;border-radius:50%;background:rgba(255,255,255,.55);transform:scale(0);animation:ripple .5s ease-out forwards;pointer-events:none}
+@keyframes ripple{to{transform:scale(3);opacity:0}}
+.map-box path.flash-yes{fill:var(--yes)}
+.map-box path.flash-no{fill:var(--no);opacity:.55}
+#stage.leaving{animation:leave .24s ease forwards}
+#stage.entering{animation:enter .3s ease}
+@keyframes leave{to{opacity:0;transform:translateX(-16px)}}
+@keyframes enter{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+/* 当たり画面 */
+#stage.win{border-color:var(--gold);background:linear-gradient(160deg,color-mix(in srgb,var(--gold) 18%,var(--surface)) 0%,var(--surface) 60%);animation:glow 1.6s ease 2}
+@keyframes glow{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--gold) 0%,transparent)}50%{box-shadow:0 0 0 8px color-mix(in srgb,var(--gold) 35%,transparent)}}
+.win-badge{display:inline-flex;align-items:baseline;gap:4px;font-weight:900;color:var(--gold);font-family:var(--f-display);letter-spacing:.04em;font-size:1.05rem}
+.win-badge b{font-size:2.4rem;line-height:1;display:inline-block;animation:count-pop .6s cubic-bezier(.2,1.6,.4,1) both .15s}
+@keyframes count-pop{from{transform:scale(0)}to{transform:scale(1)}}
+#stage.win .big{font-size:3.4rem;animation:stamp .7s cubic-bezier(.2,1.5,.35,1) both .35s;text-shadow:0 3px 0 color-mix(in srgb,var(--gold) 45%,transparent)}
+@keyframes stamp{0%{transform:scale(2.4) rotate(-8deg);opacity:0}60%{opacity:1}100%{transform:scale(1) rotate(0);opacity:1}}
+.map-box path.hit{animation:hit-pulse 1s ease 3}
+@keyframes hit-pulse{0%,100%{stroke:var(--stroke);stroke-width:.6}50%{stroke:var(--gold);stroke-width:3}}
+#confetti{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:50}
+@media (prefers-reduced-motion: reduce){
+  button.pressed,#stage.leaving,#stage.entering,#stage.win,.win-badge b,#stage.win .big,.map-box path.hit{animation:none}
+  .btns button .ripple{display:none}
+}
 .spinner{width:22px;height:22px;border:3px solid var(--line);border-top-color:var(--indigo);border-radius:50%;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion: reduce){.spinner{animation:none}.map-box path{transition:none}}
@@ -96,6 +123,7 @@ button:disabled{opacity:.45;cursor:default}
       <svg id="map" viewBox="0 0 484 476" role="img" aria-label="日本地図"></svg>
     </div>
     <section class="card" id="stage" aria-live="polite"></section>
+<canvas id="confetti" aria-hidden="true" hidden></canvas>
   </div>
 </div>
 
@@ -273,6 +301,7 @@ function back(){
 }
 
 function render(){
+  stage.classList.remove("win");
   if(state.phase === "pair1"){
     askQuestion([state.ip, ...state.b],
       ()=>advance(()=>{ state.ans1 = true; state.phase = "pair2"; }),
@@ -320,10 +349,95 @@ function askQuestion(items, onYes, onNo){
       <button class="yes" id="b-yes">はい</button><button class="no" id="b-no">いいえ</button>
       <button id="b-back" ${state.history.length ? "" : "disabled"}>1つ戻る</button>
     </div>`;
-  document.getElementById("b-yes").onclick = onYes;
-  document.getElementById("b-no").onclick = onNo;
-  document.getElementById("b-back").onclick = back;
+  const yes = document.getElementById("b-yes"), no = document.getElementById("b-no");
+  yes.onclick = e=>choose(e, yes, ask, true, onYes);
+  no.onclick = e=>choose(e, no, ask, false, onNo);
+  document.getElementById("b-back").onclick = ()=>{ if(!busy) transition(back); };
 }
+
+/* ---------- 演出 ---------- */
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+let busy = false;
+function addRipple(e, btn){
+  const r = btn.getBoundingClientRect();
+  const size = Math.max(r.width, r.height);
+  const dot = document.createElement("span");
+  dot.className = "ripple";
+  const cx = e && e.clientX ? e.clientX : r.left + r.width/2;
+  const cy = e && e.clientY ? e.clientY : r.top + r.height/2;
+  Object.assign(dot.style, {width:size+"px", height:size+"px", left:(cx - r.left - size/2)+"px", top:(cy - r.top - size/2)+"px"});
+  btn.appendChild(dot);
+}
+/* カードを左へ退場させてから中身を差し替え、右から登場させる */
+function transition(next){
+  if(reduceMotion){ next(); return; }
+  stage.classList.remove("entering");
+  stage.classList.add("leaving");
+  setTimeout(()=>{
+    stage.classList.remove("leaving");
+    next();
+    stage.classList.add("entering");
+    setTimeout(()=>stage.classList.remove("entering"), 320);
+  }, 240);
+}
+/* はい＝緑、いいえ＝赤で黄色の県を一瞬光らせてから次へ */
+function choose(e, btn, ask, isYes, next){
+  if(busy) return;
+  busy = true;
+  stage.querySelectorAll("button").forEach(b=>{ if(b !== btn) b.disabled = true; });
+  const done = ()=>{ busy = false; next(); };
+  if(reduceMotion){ done(); return; }
+  btn.classList.add("pressed");
+  addRipple(e, btn);
+  for(const p of ask){ const el = pathByCode[p.code]; if(el) el.classList.add(isYes ? "flash-yes" : "flash-no"); }
+  setTimeout(()=>transition(done), 330);
+}
+
+/* 紙吹雪 */
+let confettiRun = 0;
+function confetti(amount=160){
+  if(reduceMotion) return;
+  const cv = document.getElementById("confetti");
+  const ctx = cv.getContext("2d");
+  if(!ctx) return;
+  const run = ++confettiRun;
+  const dpr = window.devicePixelRatio || 1;
+  const W = window.innerWidth, H = window.innerHeight;
+  cv.hidden = false;
+  cv.width = W*dpr; cv.height = H*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const css = getComputedStyle(document.documentElement);
+  const colors = ["--gold","--indigo","--yes","--no"].map(v=>css.getPropertyValue(v).trim()).filter(Boolean).concat(["#f4c542","#7aa7ff"]);
+  const parts = Array.from({length:amount}, ()=>({
+    x: W/2 + (Math.random()-.5)*W*.35,
+    y: H*.35,
+    vx: (Math.random()-.5)*14,
+    vy: -Math.random()*14 - 4,
+    w: 6 + Math.random()*6, h: 8 + Math.random()*8,
+    rot: Math.random()*Math.PI, vr: (Math.random()-.5)*.4,
+    c: colors[Math.floor(Math.random()*colors.length)]
+  }));
+  const life = 2600;
+  const start = performance.now();
+  function frame(now){
+    if(run !== confettiRun) return;
+    const t = now - start;
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalAlpha = Math.max(0, 1 - t/life);
+    for(const p of parts){
+      p.vy += .32; p.vx *= .99; p.x += p.vx; p.y += p.vy; p.rot += p.vr;
+      ctx.save();
+      ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.fillStyle = p.c;
+      ctx.fillRect(-p.w/2, -p.h/2, p.w, Math.max(1, p.h * Math.abs(Math.cos(p.rot*2))));
+      ctx.restore();
+    }
+    if(t < life) requestAnimationFrame(frame);
+    else{ ctx.clearRect(0, 0, W, H); cv.hidden = true; }
+  }
+  requestAnimationFrame(frame);
+}
+
 
 function shareText(count){
   return `出身県あてゲームで、${count}問で出身県を当てられた！ あなたは何問で当てられる？`;
@@ -337,7 +451,6 @@ function renderShare(count){
   const links = [
     ["X", `https://twitter.com/intent/tweet?text=${enc(text)}&url=${enc(url)}&hashtags=${enc(tag)}`],
     ["LINE", `https://social-plugins.line.me/lineit/share?url=${enc(url)}&text=${enc(text)}`],
-    ["Facebook", `https://www.facebook.com/sharer/sharer.php?u=${enc(url)}`],
     ["Bluesky", `https://bsky.app/intent/compose?text=${enc(text + " #" + tag + " " + url)}`],
     ["Threads", `https://www.threads.net/intent/post?text=${enc(text + " #" + tag + " " + url)}`]
   ];
@@ -367,8 +480,9 @@ function renderShare(count){
 
 function renderWin(pref){
   paint({hit:pref});
+  stage.classList.add("win");
   stage.innerHTML = `
-    <div class="step">${state.count}問で当てました</div>
+    <div class="win-badge"><b>${state.count}</b>問で当てました！</div>
     <p class="note">あなたの出身は…</p>
     <p class="big">${pref.name}</p>
     <p class="q" style="font-size:1.05rem">合っていましたか？</p>
@@ -378,10 +492,11 @@ function renderWin(pref){
     </div>
     <p class="note" id="msg"></p>
     <div class="share" id="share"></div>`;
-  document.getElementById("b-ok").onclick = ()=>{ document.getElementById("msg").textContent = "やった！"; };
+  document.getElementById("b-ok").onclick = ()=>{ document.getElementById("msg").textContent = "やった！"; confetti(120); };
   document.getElementById("b-ng").onclick = ()=>{ document.getElementById("msg").textContent = "くやしい！もう一回挑戦させてください。"; };
-  document.getElementById("b-again").onclick = newGame;
+  document.getElementById("b-again").onclick = ()=>{ stage.classList.remove("win"); transition(newGame); };
   renderShare(state.count);
+  confetti();
 }
 
 drawMap();
