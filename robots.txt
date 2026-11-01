@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://choko1229.github.io/Prefecture-guess/sitemap.xml
