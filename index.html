@@ -241,7 +241,7 @@ function buildTree(list){
 
 /* ---------- 最初の2問 ----------
    IPの県(A)に、ランダムに選んだ県の組(B群・C群)を混ぜて2回聞く
-   第1問 A+B群 / 第2問 A+C群 → はい・はい=A、はい・いいえ=B群、いいえ・はい=C群、いいえ・いいえ=その他
+   第1問 A+B群 / 第2問 B群+C群 → はい・いいえ=A、はい・はい=B群、いいえ・はい=C群、いいえ・いいえ=その他
    おとりは√人口で重み付けして選ぶ（大都市に偏りすぎず、IPの県が浮かないようにするため） */
 const DECOY_COUNT = 9;
 function pickWeighted(list){
@@ -307,13 +307,14 @@ function render(){
       ()=>advance(()=>{ state.ans1 = true; state.phase = "pair2"; }),
       ()=>advance(()=>{ state.ans1 = false; state.phase = "pair2"; }));
   }else if(state.phase === "pair2"){
-    askQuestion([state.ip, ...state.c],
+    // 第2問は B群とC群（IPの県は出さない）。はい→いいえ のときだけIPの県に確定する
+    askQuestion([...state.b, ...state.c],
       ()=>advance(()=>{
-        if(state.ans1){ state.phase = "done"; state.result = state.ip; }
-        else{ state.phase = "tree"; state.node = buildTree(state.c.slice()); }
+        state.phase = "tree";
+        state.node = buildTree((state.ans1 ? state.b : state.c).slice());
       }),
       ()=>advance(()=>{
-        if(state.ans1){ state.phase = "tree"; state.node = buildTree(state.b.slice()); }
+        if(state.ans1){ state.phase = "done"; state.result = state.ip; }
         else{ state.phase = "tree"; state.node = buildTree(PREFS.filter(p=>p !== state.ip && !state.b.includes(p) && !state.c.includes(p))); }
       }));
   }else if(state.phase === "tree"){
