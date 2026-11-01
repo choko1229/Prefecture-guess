@@ -186,65 +186,106 @@ function buildTree(list){
   return nodes[0];
 }
 
+/* ---------- 最初の2問 ----------
+   IPの県(A)を、別地方からランダムに選んだ県(B, C)と2県ずつ組にして2回聞く
+   第1問 {A,B} / 第2問 {A,C} → はい・はい=A、はい・いいえ=B、いいえ・はい=C、いいえ・いいえ=その他 */
+const REGIONS = [[1],[2,3,4,5,6,7],[8,9,10,11,12,13,14],[15,16,17,18,19,20,21,22,23],[24,25,26,27,28,29,30],[31,32,33,34,35],[36,37,38,39],[40,41,42,43,44,45,46,47]];
+const regionOf = code=>REGIONS.findIndex(r=>r.includes(code));
+function pickWeighted(list){
+  const total = list.reduce((s,p)=>s+p.pop,0);
+  let r = Math.random()*total;
+  for(const p of list){ r -= p.pop; if(r < 0) return p; }
+  return list[list.length-1];
+}
+function pickDecoys(ip){
+  const pool = PREFS.filter(p=>p !== ip && regionOf(p.code) !== regionOf(ip.code));
+  const b = pickWeighted(pool);
+  const c = pickWeighted(pool.filter(p=>p !== b));
+  return [b, c];
+}
+
 /* ---------- ゲーム ---------- */
 const stage = document.getElementById("stage");
 let state;
 
 function newGame(){
-  state = {count:0, first:null, node:null, history:[]};
+  state = {count:0, ip:null, b:null, c:null, ans1:null, node:null, history:[]};
   paint();
   stage.innerHTML = `<div class="step">準備中</div><div class="btns"><div class="spinner" aria-hidden="true"></div><p class="note">考えています…</p></div>`;
   locate().then(pref=>{
-    state.first = pref || PREFS.reduce((a,b)=>a.pop>=b.pop?a:b);
-    renderFirst();
+    if(pref){
+      state.ip = pref;
+      [state.b, state.c] = pickDecoys(pref);
+      state.phase = "pair1";
+    }else{
+      state.node = buildTree(PREFS.slice());
+      state.phase = "tree";
+    }
+    render();
   });
 }
 
-function renderFirst(){
-  paint({ask:[state.first]});
-  stage.innerHTML = `
-    <div class="step">第1問</div>
-    <p class="q">あなたの出身は <strong>${state.first.name}</strong> ですか？</p>
-    <div class="btns"><button class="yes" id="b-yes">はい</button><button class="no" id="b-no">いいえ</button></div>`;
-  document.getElementById("b-yes").onclick = ()=>{ state.count = 1; renderWin(state.first); };
-  document.getElementById("b-no").onclick = ()=>{
-    state.count = 1;
-    state.node = buildTree(PREFS.filter(p=>p !== state.first));
-    renderQuestion();
-  };
+function snapshot(){ return {phase:state.phase, ans1:state.ans1, node:state.node, count:state.count}; }
+function advance(update){
+  state.history.push(snapshot());
+  state.count++;
+  update();
+  render();
+}
+function back(){
+  const h = state.history.pop(); if(!h) return;
+  Object.assign(state, h);
+  render();
 }
 
-function renderQuestion(){
-  const n = state.node;
-  if(n.leaf){ renderWin(n.leaf); return; }
-  const askLeft = n.left.items.length <= n.right.items.length;
-  const asked = askLeft ? n.left : n.right;
-  const other = askLeft ? n.right : n.left;
-  const ask = asked.items.slice().sort((a,b)=>a.code-b.code);
+function render(){
+  if(state.phase === "pair1"){
+    askQuestion([state.ip, state.b],
+      ()=>advance(()=>{ state.ans1 = true; state.phase = "pair2"; }),
+      ()=>advance(()=>{ state.ans1 = false; state.phase = "pair2"; }));
+  }else if(state.phase === "pair2"){
+    askQuestion([state.ip, state.c],
+      ()=>advance(()=>{ state.phase = "done"; state.result = state.ans1 ? state.ip : state.c; }),
+      ()=>advance(()=>{
+        if(state.ans1){ state.phase = "done"; state.result = state.b; }
+        else{ state.phase = "tree"; state.node = buildTree(PREFS.filter(p=>![state.ip, state.b, state.c].includes(p))); }
+      }));
+  }else if(state.phase === "tree"){
+    const n = state.node;
+    if(n.leaf){ renderWin(n.leaf); return; }
+    const askLeft = n.left.items.length <= n.right.items.length;
+    const asked = askLeft ? n.left : n.right;
+    const other = askLeft ? n.right : n.left;
+    askQuestion(asked.items,
+      ()=>advance(()=>{ state.node = asked; }),
+      ()=>advance(()=>{ state.node = other; }));
+  }else{
+    renderWin(state.result);
+  }
+}
+
+function askQuestion(items, onYes, onNo){
+  const ask = items.slice().sort((a,b)=>a.code-b.code);
   paint({ask});
   const single = ask.length === 1;
+  const two = ask.length === 2;
   const list = ask.map(p=>`<span class="chip">${p.name}</span>`).join("");
+  const text = single
+    ? `あなたの出身は <strong>${ask[0].name}</strong> ですか？`
+    : two
+      ? `あなたの出身は、地図で<span class="y">黄色</span>の2つのどちらかですか？`
+      : `あなたの出身は、地図で<span class="y">黄色</span>の都道府県のどれかですか？`;
   stage.innerHTML = `
     <div class="step">第${state.count+1}問</div>
-    <p class="q">${single ? `あなたの出身は <strong>${ask[0].name}</strong> ですか？` : `あなたの出身は、地図で<span class="y">黄色</span>の都道府県のどれかですか？`}</p>
+    <p class="q">${text}</p>
     ${single ? "" : `<div class="chips">${list}</div>`}
     <div class="btns">
       <button class="yes" id="b-yes">はい</button><button class="no" id="b-no">いいえ</button>
       <button id="b-back" ${state.history.length ? "" : "disabled"}>1つ戻る</button>
     </div>`;
-  const go = child=>{
-    state.history.push({node:state.node, count:state.count});
-    state.node = child;
-    state.count++;
-    renderQuestion();
-  };
-  document.getElementById("b-yes").onclick = ()=>go(asked);
-  document.getElementById("b-no").onclick = ()=>go(other);
-  document.getElementById("b-back").onclick = ()=>{
-    const h = state.history.pop(); if(!h) return;
-    state.node = h.node; state.count = h.count;
-    renderQuestion();
-  };
+  document.getElementById("b-yes").onclick = onYes;
+  document.getElementById("b-no").onclick = onNo;
+  document.getElementById("b-back").onclick = back;
 }
 
 function renderWin(pref){
