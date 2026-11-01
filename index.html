@@ -212,20 +212,29 @@ function buildTree(list){
 }
 
 /* ---------- 最初の2問 ----------
-   IPの県(A)を、別地方からランダムに選んだ県(B, C)と2県ずつ組にして2回聞く
-   第1問 {A,B} / 第2問 {A,C} → はい・はい=A、はい・いいえ=B、いいえ・はい=C、いいえ・いいえ=その他 */
-const REGIONS = [[1],[2,3,4,5,6,7],[8,9,10,11,12,13,14],[15,16,17,18,19,20,21,22,23],[24,25,26,27,28,29,30],[31,32,33,34,35],[36,37,38,39],[40,41,42,43,44,45,46,47]];
-const regionOf = code=>REGIONS.findIndex(r=>r.includes(code));
+   IPの県(A)に、ランダムに選んだ県の組(B群・C群)を混ぜて2回聞く
+   第1問 A+B群 / 第2問 A+C群 → はい・はい=A、はい・いいえ=B群、いいえ・はい=C群、いいえ・いいえ=その他
+   おとりは√人口で重み付けして選ぶ（大都市に偏りすぎず、IPの県が浮かないようにするため） */
+const DECOY_COUNT = 9;
 function pickWeighted(list){
-  const total = list.reduce((s,p)=>s+p.pop,0);
+  const weights = list.map(p=>Math.sqrt(p.pop));
+  const total = weights.reduce((s,w)=>s+w,0);
   let r = Math.random()*total;
-  for(const p of list){ r -= p.pop; if(r < 0) return p; }
+  for(let i=0;i<list.length;i++){ r -= weights[i]; if(r < 0) return list[i]; }
   return list[list.length-1];
 }
+function pickMany(pool, n){
+  const rest = pool.slice(), out = [];
+  while(out.length < n && rest.length){
+    const p = pickWeighted(rest);
+    out.push(p); rest.splice(rest.indexOf(p),1);
+  }
+  return out;
+}
 function pickDecoys(ip){
-  const pool = PREFS.filter(p=>p !== ip && regionOf(p.code) !== regionOf(ip.code));
-  const b = pickWeighted(pool);
-  const c = pickWeighted(pool.filter(p=>p !== b));
+  const pool = PREFS.filter(p=>p !== ip);
+  const b = pickMany(pool, DECOY_COUNT);
+  const c = pickMany(pool.filter(p=>!b.includes(p)), DECOY_COUNT);
   return [b, c];
 }
 
@@ -265,15 +274,18 @@ function back(){
 
 function render(){
   if(state.phase === "pair1"){
-    askQuestion([state.ip, state.b],
+    askQuestion([state.ip, ...state.b],
       ()=>advance(()=>{ state.ans1 = true; state.phase = "pair2"; }),
       ()=>advance(()=>{ state.ans1 = false; state.phase = "pair2"; }));
   }else if(state.phase === "pair2"){
-    askQuestion([state.ip, state.c],
-      ()=>advance(()=>{ state.phase = "done"; state.result = state.ans1 ? state.ip : state.c; }),
+    askQuestion([state.ip, ...state.c],
       ()=>advance(()=>{
-        if(state.ans1){ state.phase = "done"; state.result = state.b; }
-        else{ state.phase = "tree"; state.node = buildTree(PREFS.filter(p=>![state.ip, state.b, state.c].includes(p))); }
+        if(state.ans1){ state.phase = "done"; state.result = state.ip; }
+        else{ state.phase = "tree"; state.node = buildTree(state.c.slice()); }
+      }),
+      ()=>advance(()=>{
+        if(state.ans1){ state.phase = "tree"; state.node = buildTree(state.b.slice()); }
+        else{ state.phase = "tree"; state.node = buildTree(PREFS.filter(p=>p !== state.ip && !state.b.includes(p) && !state.c.includes(p))); }
       }));
   }else if(state.phase === "tree"){
     const n = state.node;
